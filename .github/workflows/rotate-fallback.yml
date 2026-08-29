@@ -1,0 +1,65 @@
+name: Rotate fallback stories
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Advance each worker to the next story
+        run: |
+          set -euo pipefail
+
+          mapfile -t ALL < <(grep -v '^[[:space:]]*$' stories.txt)
+
+          COUNT="${#ALL[@]}"
+          if [ "$COUNT" -lt 48 ]; then
+            echo "Expected at least 48 stories, found $COUNT"
+            exit 1
+          fi
+
+          mkdir -p state fallback
+
+          if [ ! -f state/indexes.txt ]; then
+            printf '1=0\n2=0\n3=0\n4=0\n' > state/indexes.txt
+          fi
+
+          declare -A IDX
+          while IFS='=' read -r worker index; do
+            [ -n "${worker:-}" ] || continue
+            IDX["$worker"]="$index"
+          done < state/indexes.txt
+
+          : > state/indexes.txt
+
+          for worker in 1 2 3 4; do
+            start=$(( (worker - 1) * 12 ))
+            current="${IDX[$worker]:-0}"
+            current=$(( current % 12 ))
+            pick=$(( start + current ))
+            printf '%s\n' "${ALL[$pick]}" > "fallback/worker-${worker}.txt"
+            next=$(( (current + 1) % 12 ))
+            echo "${worker}=${next}" >> state/indexes.txt
+            echo "worker-${worker}: used bank slot ${current} (line $((pick + 1)))"
+          done
+
+      - name: Commit rotated fallbacks
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/indexes.txt fallback/worker-1.txt fallback/worker-2.txt fallback/worker-3.txt fallback/worker-4.txt
+          if git diff --cached --quiet; then
+            echo "No fallback changes"
+            exit 0
+          fi
+          git commit -m "Rotate worker fallback stories"
+          git push
