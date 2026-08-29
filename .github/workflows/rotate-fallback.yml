@@ -2,7 +2,7 @@ name: Rotate fallback stories
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Advance each worker to the next story
+      - name: Generate 48 new stories
+        id: gen
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 scripts/update_stories.py
+
+      - name: Write worker fallbacks
         run: |
           set -euo pipefail
 
@@ -28,6 +35,18 @@ jobs:
           fi
 
           mkdir -p state fallback
+
+          if [ "${{ steps.gen.outcome }}" = "success" ]; then
+            echo "New bank generated; seeding slot 0 for each worker"
+            printf '%s\n' "${ALL[0]}"  > fallback/worker-1.txt
+            printf '%s\n' "${ALL[12]}" > fallback/worker-2.txt
+            printf '%s\n' "${ALL[24]}" > fallback/worker-3.txt
+            printf '%s\n' "${ALL[36]}" > fallback/worker-4.txt
+            printf '1=1\n2=1\n3=1\n4=1\n' > state/indexes.txt
+            exit 0
+          fi
+
+          echo "Generation skipped or failed; rotating inside the existing bank"
 
           if [ ! -f state/indexes.txt ]; then
             printf '1=0\n2=0\n3=0\n4=0\n' > state/indexes.txt
@@ -52,14 +71,14 @@ jobs:
             echo "worker-${worker}: used bank slot ${current} (line $((pick + 1)))"
           done
 
-      - name: Commit rotated fallbacks
+      - name: Commit stories and fallbacks
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/indexes.txt fallback/worker-1.txt fallback/worker-2.txt fallback/worker-3.txt fallback/worker-4.txt
+          git add stories.txt state/indexes.txt fallback/worker-1.txt fallback/worker-2.txt fallback/worker-3.txt fallback/worker-4.txt
           if git diff --cached --quiet; then
-            echo "No fallback changes"
+            echo "No changes"
             exit 0
           fi
-          git commit -m "Rotate worker fallback stories"
+          git commit -m "Refresh stories.txt and worker fallbacks"
           git push
